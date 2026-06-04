@@ -69,7 +69,8 @@ class Clip:
 class _RustDetector:
     """Wraps the motion_core Rust binary via stdin/stdout."""
 
-    def __init__(self, width: int, height: int, threshold: float, history: int):
+    def __init__(self, width: int, height: int, threshold: float, history: int,
+                 min_blob_fraction: float = 0.01):
         self.width  = width
         self.height = height
         self._frame_bytes = width * height * 3
@@ -80,6 +81,7 @@ class _RustDetector:
             "height": height,
             "threshold": threshold,
             "history": history,
+            "min_blob_fraction": min_blob_fraction,
         })
 
     def start(self):
@@ -209,7 +211,7 @@ class MotionPipelineThread(threading.Thread):
         if RUST_BINARY.exists():
             logger.info("Using Rust motion_core back-end.")
             self._detector: _RustDetector | _OpenCVDetector = _RustDetector(
-                width, height, motion_threshold, history
+                width, height, motion_threshold, history, min_blob_fraction
             )
             self._use_rust = True
         else:
