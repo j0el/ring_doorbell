@@ -280,6 +280,12 @@ class MainWindow(QMainWindow):
         self._live_timer.setInterval(PLAYBACK_TIMER_MS)
         self._live_timer.timeout.connect(self._on_live_tick)
 
+        # Start live view automatically if capture is active.
+        # Must be done here — after timers exist — so the toggled signal
+        # fires with everything fully initialised.
+        if self._live_queue is not None:
+            self.chk_live.setChecked(True)
+
     # ------------------------------------------------------------------
     def _build_ui(self):
         central = QWidget()
@@ -353,7 +359,6 @@ class MainWindow(QMainWindow):
             "QCheckBox::indicator { width: 14px; height: 14px; }"
         )
         self.chk_live.setVisible(self._live_queue is not None)
-        self.chk_live.setChecked(self._live_queue is not None)
         self.chk_live.toggled.connect(self._on_live_toggled)
 
         btn_shutdown = QPushButton("⏻  Shutdown")
@@ -548,6 +553,10 @@ class MainWindow(QMainWindow):
         self._playing = False
         self._play_timer.stop()
         self.controls.set_playing(False)
+
+        # Stop live view so it doesn't overwrite clip frames
+        if self.chk_live.isChecked():
+            self.chk_live.setChecked(False)
 
         mp4 = Path(meta.path)
         if not mp4.exists():
