@@ -4,6 +4,16 @@ Connects to your Ring doorbell's live stream, detects motion, and saves motion e
 
 No Ring Protect subscription required.
 
+![Ring Guardian screenshot](screenshot.png)
+
+---
+
+## Credits
+
+Ring Guardian's Node.js bridge is built on [ring-client-api](https://github.com/dgreif/ring) by **Dylan Greif** — an impressive piece of reverse-engineering that decodes Ring's undocumented OAuth and WebRTC protocols. Without that work this project wouldn't exist. Thanks Dylan.
+
+> Note: `ring-client-api` is unofficial and unaffiliated with Ring / Amazon. It could break if Ring changes their backend.
+
 ---
 
 ## Requirements
@@ -14,7 +24,7 @@ No Ring Protect subscription required.
 | uv | any | `brew install uv` or `curl -LsSf https://astral.sh/uv/install.sh \| sh` |
 | Node.js | 18 | https://nodejs.org or `brew install node` |
 | ffmpeg | any recent | `brew install ffmpeg` |
-| Rust | stable (optional) | https://rustup.rs — only needed for the faster motion backend |
+| Rust | stable (optional) | https://rustup.rs — recommended on slower machines |
 
 ---
 
@@ -88,7 +98,7 @@ uv run python main.py --gui-only
 | Select multiple clips | Shift+click or Cmd+click |
 | Delete selected | Click 🗑 Delete (no confirmation) |
 | Undo last delete | Click ↩ Undo — files go to `clips/.trash/` and are fully restored on undo |
-| Live camera feed | Check **Show Live Video** (visible only during active capture) |
+| Live camera feed | Check **Show Live Video** (starts checked; visible only during active capture) |
 | Shutdown | Click **⏻ Shutdown** to stop all capture threads and close |
 
 ---
@@ -105,8 +115,8 @@ uv run python main.py --camera "Front Door" [options]
 | `--height` | 720 | Capture frame height |
 | `--fps` | 15 | Frames per second |
 | `--threshold` | 0.005 | Total motion pixel fraction to trigger detection (0–1) |
-| `--min-blob` | 0.005 | Minimum contiguous moving region as fraction of frame — filters reflections and small flickers |
-| `--min-frames` | 3 | Consecutive motion frames required before a clip starts — filters single-frame flashes |
+| `--min-blob` | 0.01 | Minimum contiguous moving region as fraction of frame — filters reflections and small flickers |
+| `--min-frames` | 5 | Consecutive motion frames required before a clip starts — filters single-frame flashes |
 | `--pre-roll` | 15 | Frames captured before motion starts |
 | `--post-roll` | 3.0 | Seconds of quiet before a clip is closed |
 | `--output-fps` | 15.0 | FPS written to saved MP4 |
@@ -117,7 +127,7 @@ uv run python main.py --camera "Front Door" [options]
 Too many false positives (reflections, passing headlights, shadows):
 
 ```bash
-uv run python main.py --camera "Front Door" --min-blob 0.01 --min-frames 5
+uv run python main.py --camera "Front Door" --min-blob 0.015 --min-frames 6
 ```
 
 Missing real events:
@@ -128,16 +138,29 @@ uv run python main.py --camera "Front Door" --threshold 0.003 --min-blob 0.002 -
 
 ---
 
-## Optional: Rust motion backend
+## Rust motion backend (recommended)
 
-The default backend uses OpenCV (pure Python). A Rust backend is included that runs at ~200 fps on a single core — well ahead of any camera feed and with lower CPU usage.
+The default backend uses Python/OpenCV for motion detection. On faster machines this is fine, but on slower processors the Python pipeline can fall behind the camera feed, causing brief or fast-moving subjects to slip through undetected between processed frames.
+
+The included Rust backend processes frames at ~200 fps on a single core — an order of magnitude faster than Python — keeping up with any camera feed without dropping frames. This makes a real difference for:
+
+- **Brief events**: someone walking quickly past the frame
+- **Small motions**: a hand, a pet, a package drop
+- **Slower machines**: older Macs, laptops, or any machine where Python CPU usage is high
+
+### Building
 
 ```bash
+# Install Rust if you haven't already
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source ~/.cargo/env
+
+# Build the motion detector
 cd motion_core
 cargo build --release
 ```
 
-The binary lands at `motion_core/target/release/motion_core`. Ring Guardian auto-detects it on the next run.
+The binary lands at `motion_core/target/release/motion_core`. Ring Guardian auto-detects it on the next run — no other changes needed.
 
 ---
 
@@ -151,9 +174,10 @@ ring_doorbell/
 ├── motion.py             Motion detection (Rust or OpenCV MOG2 fallback)
 ├── recorder.py           Writes MP4 clips to clips/ with timestamp overlay
 ├── gui.py                PyQt6 GUI: clip browser, player, live view
+├── ring_auth.py          In-app Ring sign-in dialog
 ├── package.json          Node.js dependencies (ring-client-api)
 ├── pyproject.toml        Python dependencies
-├── motion_core/          Optional Rust motion detector
+├── motion_core/          Rust motion detector (optional but recommended)
 │   ├── Cargo.toml
 │   └── src/main.rs
 └── clips/                Saved clips and thumbnails (git-ignored)
