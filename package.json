@@ -1,0 +1,16 @@
+{
+  "name": "ring-guardian-bridge",
+  "version": "1.0.0",
+  "description": "Node.js bridge: Ring SIP live stream → raw BGR24 frames on stdout",
+  "main": "ring_bridge.js",
+  "scripts": {
+    "start": "node ring_bridge.js",
+    "list":  "node ring_bridge.js --list"
+  },
+  "dependencies": {
+    "ring-client-api": "^13.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
