@@ -42,6 +42,7 @@ from ring_capture import RingCaptureThread, list_cameras
 from motion import MotionPipelineThread
 from recorder import RecorderThread
 from gui import MainWindow
+from ring_auth import run_auth_dialog
 
 
 # ---------------------------------------------------------------------------
@@ -61,10 +62,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--fps",      type=int, default=15)
     p.add_argument("--threshold", type=float, default=0.005,
                    help="Motion pixel-change fraction (0–1)")
-    p.add_argument("--min-blob", type=float, default=0.005,
+    p.add_argument("--min-blob", type=float, default=0.01,
                    help="Minimum contiguous blob size as fraction of frame (0–1). "
                         "Filters reflections/small flickers.")
-    p.add_argument("--min-frames", type=int, default=3,
+    p.add_argument("--min-frames", type=int, default=5,
                    help="Consecutive motion frames required before recording starts. "
                         "Filters single-frame flickers.")
     p.add_argument("--pre-roll",  type=int, default=15,
@@ -79,14 +80,52 @@ def parse_args() -> argparse.Namespace:
 
 
 # ---------------------------------------------------------------------------
+# Token helpers
+# ---------------------------------------------------------------------------
+
+TOKEN_FILE = Path("ring_token.json")
+
+
+def _token_exists() -> bool:
+    """Return True if ring_token.json exists and has a non-empty refreshToken."""
+    try:
+        import json
+        data = json.loads(TOKEN_FILE.read_text())
+        return bool(data.get("refreshToken"))
+    except Exception:
+        return False
+
+
+def _ensure_token(node_bin: str) -> bool:
+    """
+    If no token is present, launch the Qt auth dialog.
+    Returns True when a valid token is available, False if the user cancelled.
+    Must be called after a QApplication exists.
+    """
+    if _token_exists():
+        return True
+    logger.info("No Ring token found — showing sign-in dialog.")
+    return run_auth_dialog(node_bin=node_bin)
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
 def main():
     args = parse_args()
 
-    # --list mode
+    # QApplication is needed for both the auth dialog and the main GUI,
+    # so we create it once here regardless of mode.
+    app = QApplication.instance() or QApplication(sys.argv)
+    app.setStyle("Fusion")
+    _apply_dark_palette(app)
+
+    # --list mode: still needs a token to talk to Ring's API
     if args.list:
+        if not _ensure_token(args.node):
+            logger.error("Authentication cancelled.")
+            sys.exit(1)
         logger.info("Querying available cameras…")
         names = list_cameras(node_bin=args.node)
         if names:
@@ -94,15 +133,19 @@ def main():
             for n in names:
                 print(f"  • {n}")
         else:
-            print("No cameras found (or bridge failed — check Node.js / ring_token.json).")
+            print("No cameras found (or bridge failed — check ring_token.json).")
         return
 
-    # GUI-only mode: just show the player
+    # GUI-only mode: just show the player, no token required
     if args.gui_only:
         _run_gui(meta_queue=queue.Queue())
         return
 
-    # Normal capture mode
+    # Normal capture mode — ensure we have a token before starting threads
+    if not _ensure_token(args.node):
+        logger.error("Authentication cancelled.")
+        sys.exit(1)
+
     if not args.camera:
         logger.error("--camera NAME is required (or use --list to see camera names).")
         sys.exit(1)
@@ -182,9 +225,8 @@ def main():
 def _run_gui(meta_queue: queue.Queue, camera_name: str = "",
              live_queue: "Optional[queue.Queue]" = None,
              on_shutdown=None):
+    # QApplication is already created in main(); just get the instance.
     app = QApplication.instance() or QApplication(sys.argv)
-    app.setStyle("Fusion")
-    _apply_dark_palette(app)
 
     win = MainWindow(meta_queue=meta_queue, live_queue=live_queue,
                      on_shutdown=on_shutdown)

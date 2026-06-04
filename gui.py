@@ -335,13 +335,43 @@ class MainWindow(QMainWindow):
         right = QWidget()
         rv = QVBoxLayout(right)
         rv.setContentsMargins(4, 4, 4, 4)
+        rv.setSpacing(4)
 
-        # Live video toggle (only shown when a live_queue is available)
-        self.chk_live = QCheckBox("Show Live Video")
-        self.chk_live.setStyleSheet("color: #aaa; padding: 2px 4px;")
+        # Top control bar: live checkbox + shutdown button side by side
+        top_bar = QHBoxLayout()
+        top_bar.setContentsMargins(0, 0, 0, 0)
+        top_bar.setSpacing(8)
+
+        self.chk_live = QCheckBox("  Show Live Video")
+        self.chk_live.setStyleSheet(
+            "QCheckBox {"
+            "  color: #ddd;"
+            "  padding: 4px 10px;"
+            "  border: 1px solid white;"
+            "  border-radius: 4px;"
+            "}"
+            "QCheckBox::indicator { width: 14px; height: 14px; }"
+        )
         self.chk_live.setVisible(self._live_queue is not None)
+        self.chk_live.setChecked(self._live_queue is not None)
         self.chk_live.toggled.connect(self._on_live_toggled)
-        rv.addWidget(self.chk_live)
+
+        btn_shutdown = QPushButton("⏻  Shutdown")
+        btn_shutdown.setStyleSheet(
+            "QPushButton {"
+            "  color: #ff9944;"
+            "  padding: 4px 12px;"
+            "  border: 1px solid #ff9944;"
+            "  border-radius: 4px;"
+            "}"
+            "QPushButton:hover { color: #ffbb66; border-color: #ffbb66; }"
+        )
+        btn_shutdown.clicked.connect(self._shutdown)
+
+        top_bar.addWidget(self.chk_live)
+        top_bar.addWidget(btn_shutdown)
+        top_bar.addStretch()
+        rv.addLayout(top_bar)
 
         self.video = VideoDisplay()
         self.controls = PlayerControls()
@@ -357,19 +387,10 @@ class MainWindow(QMainWindow):
         splitter.setStretchFactor(1, 1)
         root.addWidget(splitter)
 
-        # Status bar with shutdown button on the right
+        # Status bar
         self.status = QStatusBar()
         self.setStatusBar(self.status)
         self.status.showMessage("Ready")
-
-        btn_shutdown = QPushButton("⏻  Shutdown")
-        btn_shutdown.setStyleSheet(
-            "QPushButton { color: #ff9944; padding: 2px 10px; border: none; }"
-            "QPushButton:hover { color: #ffbb66; }"
-        )
-        btn_shutdown.setFlat(True)
-        btn_shutdown.clicked.connect(self._shutdown)
-        self.status.addPermanentWidget(btn_shutdown)
 
     # ------------------------------------------------------------------
     def _load_existing_clips(self):

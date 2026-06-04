@@ -35,44 +35,24 @@ uv sync
 
 ## Authentication
 
-Ring uses OAuth refresh tokens. You generate one once; Ring Guardian saves and auto-renews it in `ring_token.json`.
+Ring Guardian handles authentication entirely within the app — no command-line token steps required.
 
 ### First-time setup
 
-```bash
-npx ring-auth-cli
-```
+On first launch (when no `ring_token.json` exists), a **Sign in to Ring** dialog appears automatically. Enter your Ring account email and password. If your account uses 2FA, you'll be prompted for the code after signing in.
 
-Follow the prompts — enter your Ring email, password, and 2FA code if prompted. The CLI prints a refresh token:
-
-```
-Refresh Token: eyJy...
-```
-
-Save it to `ring_token.json` in the project directory:
-
-```bash
-echo '{"refreshToken": "eyJy...your token here..."}' > ring_token.json
-```
+The refresh token is saved to `ring_token.json` and reused on every subsequent launch.
 
 > **Important:** `ring_token.json` is in `.gitignore` and should never be committed. It contains credentials that grant full access to your Ring account.
 
 ### Token renewal
 
-Ring tokens expire after roughly 60 days of inactivity, or immediately if Ring detects suspicious use. If you see:
-
-```
-[bridge] No refresh token found.
-```
-or an authentication error on startup, regenerate:
+Ring tokens auto-renew during an active session. If a token expires (after ~60 days of inactivity or if Ring detects suspicious use), simply delete `ring_token.json` and relaunch — the sign-in dialog will appear again.
 
 ```bash
-npx ring-auth-cli
-# Then save the new token:
-echo '{"refreshToken": "eyJy...new token..."}' > ring_token.json
+rm ring_token.json
+uv run python main.py --camera "Front Door"
 ```
-
-Ring Guardian also auto-renews the token during a session and writes the updated value to `ring_token.json` automatically.
 
 ---
 
