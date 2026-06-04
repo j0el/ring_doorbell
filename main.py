@@ -21,6 +21,7 @@ import queue
 import signal
 import sys
 from pathlib import Path
+from typing import Optional
 
 # ---------------------------------------------------------------------------
 # Logging setup (before other imports so bridge logs look nice)
@@ -60,6 +61,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--fps",      type=int, default=15)
     p.add_argument("--threshold", type=float, default=0.005,
                    help="Motion pixel-change fraction (0–1)")
+    p.add_argument("--min-blob", type=float, default=0.005,
+                   help="Minimum contiguous blob size as fraction of frame (0–1). "
+                        "Filters reflections/small flickers.")
+    p.add_argument("--min-frames", type=int, default=3,
+                   help="Consecutive motion frames required before recording starts. "
+                        "Filters single-frame flickers.")
     p.add_argument("--pre-roll",  type=int, default=15,
                    help="Frames to save before first motion frame")
     p.add_argument("--post-roll", type=float, default=3.0,
@@ -104,6 +111,7 @@ def main():
     frame_queue = queue.Queue(maxsize=60)
     clip_queue  = queue.Queue(maxsize=20)
     meta_queue  = queue.Queue(maxsize=100)
+    live_queue  = queue.Queue(maxsize=4)    # small — GUI only needs latest frame
 
     # Threads
     capture_thread = RingCaptureThread(
@@ -120,8 +128,11 @@ def main():
         width=args.width,
         height=args.height,
         motion_threshold=args.threshold,
+        min_blob_fraction=args.min_blob,
+        min_motion_frames=args.min_frames,
         pre_roll=args.pre_roll,
         post_roll_seconds=args.post_roll,
+        live_queue=live_queue,
     )
     recorder_thread = RecorderThread(
         clip_queue=clip_queue,
@@ -129,12 +140,15 @@ def main():
         output_fps=args.output_fps,
     )
 
-    # Graceful shutdown on Ctrl-C
-    def _shutdown(sig, frame):
+    # Graceful shutdown — used by both Ctrl-C and the GUI shutdown button
+    def _stop_threads():
         logger.info("Shutting down…")
         capture_thread.stop()
         motion_thread.stop()
         recorder_thread.stop()
+
+    def _shutdown(sig, frame):
+        _stop_threads()
 
     signal.signal(signal.SIGINT,  _shutdown)
     signal.signal(signal.SIGTERM, _shutdown)
@@ -151,7 +165,8 @@ def main():
     )
 
     # Launch GUI (blocks until window is closed)
-    _run_gui(meta_queue=meta_queue, camera_name=args.camera)
+    _run_gui(meta_queue=meta_queue, camera_name=args.camera,
+             live_queue=live_queue, on_shutdown=_stop_threads)
 
     # GUI closed — stop everything
     logger.info("GUI closed, stopping threads…")
@@ -164,12 +179,15 @@ def main():
     logger.info("Done.")
 
 
-def _run_gui(meta_queue: queue.Queue, camera_name: str = ""):
+def _run_gui(meta_queue: queue.Queue, camera_name: str = "",
+             live_queue: "Optional[queue.Queue]" = None,
+             on_shutdown=None):
     app = QApplication.instance() or QApplication(sys.argv)
     app.setStyle("Fusion")
     _apply_dark_palette(app)
 
-    win = MainWindow(meta_queue=meta_queue)
+    win = MainWindow(meta_queue=meta_queue, live_queue=live_queue,
+                     on_shutdown=on_shutdown)
     if camera_name:
         win.set_status(f"Live capture  •  {camera_name}")
     win.show()

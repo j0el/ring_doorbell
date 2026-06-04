@@ -8,3 +8,18 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Node
+node_modules/
+
+# Rust build artifacts
+motion_core/target/
+
+# Auth token — never commit this
+ring_token.json
+
+# Saved clips and thumbnails
+clips/
+
+# macOS
+.DS_Store

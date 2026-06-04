@@ -128,8 +128,12 @@ class _RustDetector:
 # ---------------------------------------------------------------------------
 
 class _OpenCVDetector:
-    def __init__(self, threshold: float, history: int):
+    def __init__(self, threshold: float, history: int, min_blob_fraction: float = 0.005):
         self.threshold = threshold
+        # Minimum contiguous blob area as a fraction of total frame pixels.
+        # Reflections and light flickers produce many small scattered blobs;
+        # real objects (people, cars) produce at least one large blob.
+        self._min_blob_fraction = min_blob_fraction
         self._bg = cv2.createBackgroundSubtractorMOG2(
             history=history, varThreshold=36.0, detectShadows=False
         )
@@ -142,8 +146,19 @@ class _OpenCVDetector:
         mask    = cv2.morphologyEx(mask, cv2.MORPH_OPEN,   self._kernel)
         mask    = cv2.morphologyEx(mask, cv2.MORPH_DILATE, self._kernel)
 
-        score      = float(np.count_nonzero(mask)) / mask.size
-        has_motion = score >= self.threshold
+        score = float(np.count_nonzero(mask)) / mask.size
+
+        # Require at least one contiguous blob to exceed min_blob_fraction.
+        # This rejects scattered pixel noise (reflections, compression artefacts)
+        # while accepting solid moving objects.
+        has_motion = False
+        if score >= self.threshold:
+            contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            if contours:
+                min_pixels = self._min_blob_fraction * mask.size
+                largest = max(cv2.contourArea(c) for c in contours)
+                has_motion = largest >= min_pixels
+
         return MotionFrame(frame=frame, has_motion=has_motion,
                            motion_score=score, mask=mask)
 
@@ -173,14 +188,19 @@ class MotionPipelineThread(threading.Thread):
         width: int = 1280,
         height: int = 720,
         motion_threshold: float = 0.005,
+        min_blob_fraction: float = 0.005,
+        min_motion_frames: int = 3,
         history: int = 50,
         pre_roll: int = 15,
         post_roll_seconds: float = 3.0,
+        live_queue: "Optional[queue.Queue[Frame]]" = None,
     ):
         super().__init__(daemon=True, name="MotionPipeline")
         self.in_queue          = in_queue
         self.clip_queue        = clip_queue
+        self.live_queue        = live_queue   # optional tap for live display
         self.motion_threshold  = motion_threshold
+        self.min_motion_frames = min_motion_frames
         self.pre_roll          = pre_roll
         self.post_roll_seconds = post_roll_seconds
         self.running           = False
@@ -198,10 +218,11 @@ class MotionPipelineThread(threading.Thread):
                 "  Build with: cd motion_core && cargo build --release",
                 RUST_BINARY,
             )
-            self._detector = _OpenCVDetector(motion_threshold, history)
+            self._detector = _OpenCVDetector(motion_threshold, history, min_blob_fraction)
             self._use_rust = False
 
         self._pre_buffer: Deque[MotionFrame] = collections.deque(maxlen=pre_roll)
+        self._candidate_frames: List[MotionFrame] = []  # held until min_motion_frames reached
         self._active_clip: Optional[Clip] = None
         self._last_motion_mono: Optional[float] = None
 
@@ -229,6 +250,13 @@ class MotionPipelineThread(threading.Thread):
                     self._detector.start()  # type: ignore[union-attr]
                 continue
 
+            # Tap frame to live display queue (drop if full — never block pipeline)
+            if self.live_queue is not None:
+                try:
+                    self.live_queue.put_nowait(raw)
+                except queue.Full:
+                    pass
+
             if mf.has_motion:
                 self._on_motion(mf)
             else:
@@ -249,15 +277,28 @@ class MotionPipelineThread(threading.Thread):
     # ------------------------------------------------------------------
     def _on_motion(self, mf: MotionFrame):
         self._last_motion_mono = time.monotonic()
-        if self._active_clip is None:
-            self._active_clip = Clip(started_at=mf.frame.timestamp)
-            for buffered in self._pre_buffer:
-                self._active_clip.frames.append(buffered)
-            logger.debug("Clip started — pre-roll %d frames", len(self._pre_buffer))
-            self._pre_buffer.clear()
-        self._active_clip.frames.append(mf)
+        if self._active_clip is not None:
+            # Already in a confirmed clip — just append.
+            self._active_clip.frames.append(mf)
+        else:
+            # Accumulate candidates until we've seen min_motion_frames in a row.
+            self._candidate_frames.append(mf)
+            if len(self._candidate_frames) >= self.min_motion_frames:
+                self._active_clip = Clip(started_at=self._candidate_frames[0].frame.timestamp)
+                for buffered in self._pre_buffer:
+                    self._active_clip.frames.append(buffered)
+                self._pre_buffer.clear()
+                for cf in self._candidate_frames:
+                    self._active_clip.frames.append(cf)
+                self._candidate_frames.clear()
+                logger.debug("Clip started after %d consecutive motion frames", self.min_motion_frames)
 
     def _on_quiet(self, mf: MotionFrame):
+        if self._candidate_frames:
+            # Not enough consecutive frames — treat candidates as pre-roll and discard.
+            for cf in self._candidate_frames:
+                self._pre_buffer.append(cf)
+            self._candidate_frames.clear()
         if self._active_clip is not None:
             self._active_clip.frames.append(mf)
         else:
@@ -284,3 +325,4 @@ class MotionPipelineThread(threading.Thread):
             logger.warning("Clip queue full — dropping clip.")
         self._active_clip       = None
         self._last_motion_mono  = None
+        self._candidate_frames.clear()

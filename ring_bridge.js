@@ -114,10 +114,8 @@ async function main() {
 
   process.stderr.write(`[bridge] Starting live stream for: ${camera.name}\n`)
 
-  // Tell the camera to start streaming
-  await camera.startVideoOnDemand()
-
-  const session = await camera.createSipSession()
+  // Start live call (ring-client-api v12+; replaces startVideoOnDemand + createSipSession)
+  const liveCall = await camera.startLiveCall()
 
   // Send header line so Python knows the frame dimensions
   const header = `RING_STREAM ${OUT_WIDTH} ${OUT_HEIGHT} ${OUT_FPS}\n`
@@ -128,7 +126,7 @@ async function main() {
   let frameBuf = Buffer.alloc(0)
   const FRAME_BYTES = OUT_WIDTH * OUT_HEIGHT * 3   // BGR24
 
-  await session.startTranscoding({
+  await liveCall.startTranscoding({
     // No audio needed for motion detection
     audio: false,
 
@@ -156,7 +154,7 @@ async function main() {
   })
 
   // Re-connect loop: Ring live streams time out after ~10 minutes
-  session.onCallEnded.subscribe(async () => {
+  liveCall.onCallEnded.subscribe(async () => {
     process.stderr.write('[bridge] Stream ended — reconnecting in 2s...\n')
     await new Promise(r => setTimeout(r, 2000))
     main().catch(err => {

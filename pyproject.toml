@@ -4,4 +4,11 @@ version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
-dependencies = []
+dependencies = [
+    "ring-doorbell>=0.8.0",
+    "opencv-python>=4.8.0",
+    "numpy>=1.24.0",
+    "PyQt6>=6.6.0",
+    "PyQt6-Qt6>=6.6.0",
+    "requests>=2.31.0",
+]
