@@ -22,7 +22,7 @@ Ring Guardian's Node.js bridge is built on [ring-client-api](https://github.com/
 |------|-------------|---------|
 | Python | 3.13 | https://python.org or `brew install python` |
 | uv | any | `brew install uv` or `curl -LsSf https://astral.sh/uv/install.sh \| sh` |
-| Node.js | 18 | https://nodejs.org or `brew install node` |
+| Node.js | 18-22 | https://nodejs.org or `brew install node` |
 | ffmpeg | any recent | `brew install ffmpeg` |
 | Rust | stable (optional) | https://rustup.rs — recommended on slower machines |
 
@@ -186,3 +186,16 @@ ring_doorbell/
 ```
 
 `ring_token.json` is created at the project root after authentication. It is git-ignored — never commit it.
+
+## Troubleshooting
+
+**`Cannot find module '@eneris/push-receiver/...'` or `ring-client-api/rest-client`**
+
+This usually means dependencies were installed under an unsupported Node.js
+version (Node 24+) or a previous install was interrupted, leaving an incomplete
+node_modules. Confirm your Node version, then do a clean reinstall:
+
+    node --version          # must be 18, 20, or 22
+    rm -rf node_modules package-lock.json
+    npm install
+
