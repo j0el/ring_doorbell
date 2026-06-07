@@ -5,10 +5,10 @@
   "main": "ring_bridge.js",
   "scripts": {
     "start": "node ring_bridge.js",
-    "list":  "node ring_bridge.js --list"
+    "list": "node ring_bridge.js --list"
   },
   "dependencies": {
-    "ring-client-api": "^13.0.0"
+    "ring-client-api": "^13.2.1"
   },
   "engines": {
     "node": ">=18.0.0"
