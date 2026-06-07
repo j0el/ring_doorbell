@@ -3,16 +3,23 @@
  * ring_bridge.js
  *
  * Authenticates with Ring, opens a live streaming session for a chosen
- * camera, and pipes raw BGR24 video frames to stdout for the Python pipeline.
+ * camera, and PUBLISHES it into MediaMTX as an RTSP stream. MediaMTX then
+ * re-serves it as HLS/WebRTC to the browser (camera-api UI).
  *
- * Frame protocol on stdout:
- *   1. One ASCII header line:  "RING_STREAM <width> <height> <fps>\n"
- *   2. Repeated raw frames:    exactly width * height * 3 bytes each (BGR24)
+ * ring-client-api already runs an FFmpeg child internally (it decrypts Ring's
+ * WebRTC/RTP in JS via werift, then pipes to FFmpeg). We simply point that
+ * FFmpeg's OUTPUT at MediaMTX over RTSP instead of at stdout. Ring delivers
+ * H.264 already, so video is COPIED (-c:v copy) — no re-encode, low CPU.
+ *
+ * Pipeline:  Ring → werift → ffmpeg(-c:v copy) → rtsp://…/ring → MediaMTX
  *
  * Modes:
- *   node ring_bridge.js <camera_name> [--width 1280] [--height 720] [--fps 15]
+ *   node ring_bridge.js <camera_name> [--rtsp rtsp://127.0.0.1:8554/ring]
  *   node ring_bridge.js --list
  *   node ring_bridge.js --auth --email you@example.com --password secret
+ *
+ * The RTSP target can also be set via the RING_RTSP_URL env var.
+ * Default target: rtsp://127.0.0.1:8554/ring (matches mediamtx.yml "ring" path).
  *
  * Auth:
  *   --auth mode writes to stderr:
@@ -38,7 +45,7 @@ const camName = args[0]
 
 if (!camName) {
   const script = path.basename(process.argv[1])
-  process.stderr.write(`Usage: node ${script} <camera_name> [--width N] [--height N] [--fps N]\n`)
+  process.stderr.write(`Usage: node ${script} <camera_name> [--rtsp rtsp://127.0.0.1:8554/ring]\n`)
   process.stderr.write(`       node ${script} --list\n`)
   process.stderr.write(`       node ${script} --auth --email EMAIL --password PASSWORD\n`)
   process.exit(1)
@@ -54,9 +61,10 @@ function parseStringFlag(flag, defaultVal = null) {
   return idx !== -1 ? args[idx + 1] : defaultVal
 }
 
-const OUT_WIDTH  = parseFlag('--width',  1280)
-const OUT_HEIGHT = parseFlag('--height', 720)
-const OUT_FPS    = parseFlag('--fps',    15)
+// RTSP target to publish into (MediaMTX). Flag overrides env overrides default.
+const RTSP_URL = parseStringFlag('--rtsp')
+  || process.env.RING_RTSP_URL
+  || 'rtsp://127.0.0.1:8554/ring'
 
 // ---------------------------------------------------------------------------
 // Token persistence
@@ -173,33 +181,24 @@ async function main() {
   }
 
   process.stderr.write(`[bridge] Starting live stream for: ${camera.name}\n`)
+  process.stderr.write(`[bridge] Publishing to: ${RTSP_URL}\n`)
 
   const liveCall = await camera.startLiveCall()
 
-  const header = `RING_STREAM ${OUT_WIDTH} ${OUT_HEIGHT} ${OUT_FPS}\n`
-  process.stdout.write(header)
-  process.stderr.write(`[bridge] Header sent: ${header.trim()}\n`)
-
-  let frameBuf = Buffer.alloc(0)
-  const FRAME_BYTES = OUT_WIDTH * OUT_HEIGHT * 3
-
+  // Point ring-client-api's internal FFmpeg at MediaMTX over RTSP.
+  // Ring's video is already H.264, so copy it (no re-encode). Audio is off.
+  // -rtsp_transport tcp matches MediaMTX's rtspTransports: [tcp].
   await liveCall.startTranscoding({
     audio: false,
-    video: [
-      '-vf',     `scale=${OUT_WIDTH}:${OUT_HEIGHT}`,
-      '-vcodec', 'rawvideo',
-      '-pix_fmt', 'bgr24',
-      '-r',      String(OUT_FPS),
+    video: ['-c:v', 'copy'],
+    output: [
+      '-rtsp_transport', 'tcp',
+      '-f', 'rtsp',
+      RTSP_URL,
     ],
-    output: ['-f', 'rawvideo', 'pipe:1'],
-    stdoutCallback: (chunk) => {
-      frameBuf = Buffer.concat([frameBuf, chunk])
-      while (frameBuf.length >= FRAME_BYTES) {
-        process.stdout.write(frameBuf.slice(0, FRAME_BYTES))
-        frameBuf = frameBuf.slice(FRAME_BYTES)
-      }
-    },
   })
+
+  process.stderr.write('[bridge] Publishing — stream should appear in MediaMTX.\n')
 
   liveCall.onCallEnded.subscribe(async () => {
     process.stderr.write('[bridge] Stream ended — reconnecting in 2s...\n')

@@ -1,28 +1,72 @@
-# mediamtx.yml — local RTSP restreamer for the balcony camera
+# mediamtx.yml — dual-camera media server (balcony + ring)
 #
-# Why this exists: on this Mac, FFmpeg/OpenCV cannot open a TCP connection to
-# the camera directly (EHOSTUNREACH), even though curl/VLC/ping can. MediaMTX
-# uses its own Go RTSP stack (like VLC's) to pull the camera, then republishes
-# it on localhost where OpenCV connects without any routing trouble.
+# Serves both cameras as HLS (browser <video>) and WebRTC (low-latency).
+# - balcony: MediaMTX PULLS the thingino RTSP stream directly.
+# - ring:    the ring-bridge PUBLISHES an H.264 RTSP stream INTO this path
+#            (source: publisher). Nothing is pulled; the bridge pushes.
 #
-# Run it from the project root:   mediamtx ./mediamtx.yml
-# It serves the camera at:        rtsp://127.0.0.1:8554/balcony
+# Run from the project root:   mediamtx ./mediamtx.yml
 #
-# This is a "make it work on this Mac" shim. On a box without the connect()
-# bug, the app can point straight at the camera and skip MediaMTX entirely.
+# Browser stream URLs once running:
+#   HLS:    http://localhost:8888/balcony/index.m3u8
+#           http://localhost:8888/ring/index.m3u8
+#   WebRTC: http://localhost:8889/balcony     (built-in test player)
+#           http://localhost:8889/ring
+#
+# These map to the camera-api UI's relative paths (/hls/<cam>/index.m3u8)
+# once nginx proxies :8888 — but for local dev the UI can point straight here.
 
-# Keep logs visible in the terminal while we debug.
 logLevel: info
 logDestinations: [stdout]
 
-# Default RTSP server listens on 8554 (avoids clashing with the camera's 554).
-rtspAddress: :8554
+###############################################
+# Protocols
+###############################################
 
+# RTSP — needed because the ring-bridge publishes into us over RTSP,
+# and it's handy for debugging with ffprobe/VLC.
+rtsp: yes
+rtspAddress: :8554
+rtspTransports: [tcp]      # replaces the old top-level "protocols:" key
+
+# RTMP / SRT — not used here; turn off to reduce surface + log noise.
+rtmp: no
+srt: no
+
+# HLS — what the browser <video> tiles consume.
+hls: yes
+hlsAddress: :8888
+hlsAllowOrigins: ['*']     # replaces deprecated hlsAllowOrigin
+hlsAlwaysRemux: yes        # keep generating segments so the tile is instant
+hlsVariant: lowLatency
+hlsSegmentCount: 7
+hlsSegmentDuration: 1s
+
+# WebRTC — optional low-latency path; MediaMTX serves a built-in player at
+# http://localhost:8889/<path> which is the fastest way to confirm a feed.
+webrtc: yes
+webrtcAddress: :8889
+
+# Local-only API (useful later for health checks / programmatic status).
+api: yes
+apiAddress: 127.0.0.1:9997
+
+###############################################
+# Paths
+###############################################
 paths:
+
+  # --- Balcony: thingino camera, pulled directly over RTSP -----------------
   balcony:
-    # Pull from the camera. Replace YOURPASS with the real RTSP password.
     source: rtsp://thingino:thingino@balcony.local:554/ch0
-    # Force TCP ingest (matches what works in VLC).
-    sourceProtocol: tcp
-    # Reconnect automatically if the camera drops.
-    sourceOnDemand: no
+    rtspTransport: tcp       # replaces per-path "sourceProtocol: tcp"
+    sourceOnDemand: no       # keep it connected so the tile is always live
+
+  # --- Ring: published INTO MediaMTX by ring-bridge ------------------------
+  # source: publisher means "wait for something to push to rtsp://.../ring".
+  # The ring-bridge does that push (see ring_bridge.js, Option B).
+  ring:
+    source: publisher
+    # If the bridge drops and reconnects, let the new connection take over
+    # instead of being rejected as a duplicate publisher.
+    overridePublisher: yes
