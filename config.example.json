@@ -1,0 +1,28 @@
+{
+  "rtsp_url": "rtsp://USERNAME:PASSWORD@CAMERA_IP:554/ch0",
+  "camera_name": "CAM-B1P",
+
+  "control": {
+    "base_url": "http://192.168.5.0",
+    "username": "root",
+    "password": "YOUR_CAMERA_PASSWORD",
+    "method": "GET",
+
+    "_comment": "Motor uses GET with signed x/y step offsets ({x}/{y} filled from `step`). IR/night uses a JSON POST to json-imp.cgi. Adjust `step` to taste; flip invert_x/invert_y if an arrow moves the wrong way.",
+
+    "move_path": "/x/json-motor.cgi?d=g&x={x}&y={y}",
+    "stop_path": "",
+    "step": 20,
+    "invert_x": false,
+    "invert_y": false,
+    "pulse_seconds": 0,
+
+    "ir_on_path":  "/x/json-imp.cgi",
+    "ir_on_body":  { "cmd": "daynight", "val": "night" },
+    "ir_off_path": "/x/json-imp.cgi",
+    "ir_off_body": { "cmd": "daynight", "val": "day" },
+
+    "timeout": 4.0,
+    "verify_tls": false
+  }
+}

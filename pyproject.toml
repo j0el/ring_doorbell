@@ -5,7 +5,6 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
-    "ring-doorbell>=0.8.0",
     "opencv-python>=4.8.0",
     "numpy>=1.24.0",
     "PyQt6>=6.6.0",

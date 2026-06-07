@@ -1,0 +1,28 @@
+# mediamtx.yml — local RTSP restreamer for the balcony camera
+#
+# Why this exists: on this Mac, FFmpeg/OpenCV cannot open a TCP connection to
+# the camera directly (EHOSTUNREACH), even though curl/VLC/ping can. MediaMTX
+# uses its own Go RTSP stack (like VLC's) to pull the camera, then republishes
+# it on localhost where OpenCV connects without any routing trouble.
+#
+# Run it from the project root:   mediamtx ./mediamtx.yml
+# It serves the camera at:        rtsp://127.0.0.1:8554/balcony
+#
+# This is a "make it work on this Mac" shim. On a box without the connect()
+# bug, the app can point straight at the camera and skip MediaMTX entirely.
+
+# Keep logs visible in the terminal while we debug.
+logLevel: info
+logDestinations: [stdout]
+
+# Default RTSP server listens on 8554 (avoids clashing with the camera's 554).
+rtspAddress: :8554
+
+paths:
+  balcony:
+    # Pull from the camera. Replace YOURPASS with the real RTSP password.
+    source: rtsp://thingino:thingino@balcony.local:554/ch0
+    # Force TCP ingest (matches what works in VLC).
+    sourceProtocol: tcp
+    # Reconnect automatically if the camera drops.
+    sourceOnDemand: no

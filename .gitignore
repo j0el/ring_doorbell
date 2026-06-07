@@ -18,8 +18,15 @@ motion_core/target/
 # Auth token — never commit this
 ring_token.json
 
+# Camera RTSP URL + credentials — never commit this
+config.json
+
 # Saved clips and thumbnails
 clips/
 
 # macOS
 .DS_Store
+
+# MediaMTX auto-generated TLS certs
+auto.crt
+auto.key

@@ -38,7 +38,7 @@ from PyQt6.QtGui import (
     QColor, QFont, QIcon, QImage, QPainter, QPixmap
 )
 from PyQt6.QtWidgets import (
-    QApplication, QCheckBox, QFrame, QHBoxLayout, QLabel, QListWidget,
+    QApplication, QCheckBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QListWidget,
     QListWidgetItem, QMainWindow, QPushButton, QSizePolicy,
     QSlider, QSplitter, QStatusBar, QVBoxLayout, QWidget,
 )
@@ -177,6 +177,78 @@ def _fmt_time(seconds: float) -> str:
 
 
 # ---------------------------------------------------------------------------
+# PTZ / camera controls
+# ---------------------------------------------------------------------------
+
+class PTZControls(QWidget):
+    """
+    Directional pad (pan/tilt) + IR night-mode toggle. Emits high-level signals;
+    MainWindow connects them to a CameraControl instance. Purely a view — it
+    holds no networking logic so it stays testable and the GUI never blocks.
+    """
+
+    move_pressed = pyqtSignal(str)   # "left" | "right" | "up" | "down"
+    ir_toggled   = pyqtSignal(bool)  # True = night mode on
+
+    def __init__(self, show_ir: bool = True):
+        super().__init__()
+        self._build_ui(show_ir)
+
+    def _build_ui(self, show_ir: bool):
+        row = QHBoxLayout(self)
+        row.setContentsMargins(4, 0, 4, 4)
+        row.setSpacing(10)
+
+        # --- Pan controls: left / right only (this camera has no usable tilt) ---
+        pad = QWidget()
+        grid = QGridLayout(pad)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setSpacing(2)
+
+        btn_style = (
+            "QPushButton {"
+            "  color: #ddd; background: #2b2b2b;"
+            "  border: 1px solid #444; border-radius: 6px;"
+            "  font-size: 18px; min-width: 40px; min-height: 36px;"
+            "}"
+            "QPushButton:hover { border-color: #2a5298; }"
+            "QPushButton:pressed { background: #2a5298; }"
+        )
+
+        self.btn_left  = QPushButton("\u25c0")   # ◀
+        self.btn_right = QPushButton("\u25b6")   # ▶
+        for b in (self.btn_left, self.btn_right):
+            b.setStyleSheet(btn_style)
+            b.setAutoRepeat(True)              # hold-to-repeat for continuous pan
+            b.setAutoRepeatDelay(300)
+            b.setAutoRepeatInterval(250)
+
+        self.btn_left.clicked.connect(lambda: self.move_pressed.emit("left"))
+        self.btn_right.clicked.connect(lambda: self.move_pressed.emit("right"))
+
+        grid.addWidget(self.btn_left,  0, 0)
+        grid.addWidget(self.btn_right, 0, 1)
+        row.addWidget(pad)
+
+        row.addStretch()
+
+        # --- IR / night-mode toggle ---
+        if show_ir:
+            self.chk_ir = QCheckBox("  IR night mode")
+            self.chk_ir.setStyleSheet(
+                "QCheckBox {"
+                "  color: #ddd; padding: 4px 10px;"
+                "  border: 1px solid #555; border-radius: 4px;"
+                "}"
+                "QCheckBox::indicator { width: 14px; height: 14px; }"
+            )
+            self.chk_ir.toggled.connect(self.ir_toggled)
+            row.addWidget(self.chk_ir, alignment=Qt.AlignmentFlag.AlignVCenter)
+        else:
+            self.chk_ir = None
+
+
+# ---------------------------------------------------------------------------
 # Clip list
 # ---------------------------------------------------------------------------
 
@@ -245,10 +317,11 @@ class MainWindow(QMainWindow):
 
     def __init__(self, meta_queue: "queue.Queue[ClipMeta]",
                  live_queue: "Optional[queue.Queue]" = None,
-                 on_shutdown=None):
+                 on_shutdown=None, camera_control=None):
         super().__init__()
         self._meta_queue = meta_queue
         self._live_queue = live_queue
+        self._camera_control = camera_control   # optional CameraControl instance
         self._frames: List[np.ndarray] = []
         self._scores: List[Optional[float]] = []
         self._current_idx = 0
@@ -259,7 +332,7 @@ class MainWindow(QMainWindow):
         self._live_active = False
         self._on_shutdown = on_shutdown  # optional callable — stops pipeline threads
 
-        self.setWindowTitle("Ring Guardian")
+        self.setWindowTitle("Camera Guardian")
         self.resize(1200, 700)
         self._build_ui()
         self._load_existing_clips()
@@ -385,6 +458,20 @@ class MainWindow(QMainWindow):
         self.controls.step_fwd_clicked.connect(self._step_fwd)
         self.controls.scrub_changed.connect(self._on_scrub)
         rv.addWidget(self.video, stretch=1)
+
+        # PTZ / camera controls — only shown when a configured CameraControl
+        # was passed in (i.e. control block present in config.json).
+        if self._camera_control is not None and getattr(
+                self._camera_control.cfg, "configured", False):
+            self.ptz = PTZControls(show_ir=bool(
+                self._camera_control.cfg.ir_on_path or
+                self._camera_control.cfg.ir_off_path))
+            self.ptz.move_pressed.connect(self._on_ptz_move)
+            self.ptz.ir_toggled.connect(self._on_ir_toggled)
+            rv.addWidget(self.ptz)
+        else:
+            self.ptz = None
+
         rv.addWidget(self.controls)
 
         splitter.addWidget(left)
@@ -681,6 +768,19 @@ class MainWindow(QMainWindow):
                 break
         if frame is not None:
             self.video.display_frame(frame.image)
+
+    # ------------------------------------------------------------------
+    # PTZ / camera control handlers
+    # ------------------------------------------------------------------
+    @pyqtSlot(str)
+    def _on_ptz_move(self, direction: str):
+        if self._camera_control is not None:
+            self._camera_control.move(direction)
+
+    @pyqtSlot(bool)
+    def _on_ir_toggled(self, on: bool):
+        if self._camera_control is not None:
+            self._camera_control.set_ir(on)
 
     # ------------------------------------------------------------------
     @pyqtSlot()

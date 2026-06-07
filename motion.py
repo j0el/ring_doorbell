@@ -31,7 +31,7 @@ from typing import Deque, List, Optional
 import cv2
 import numpy as np
 
-from ring_capture import Frame
+from rtsp_capture import Frame
 
 logger = logging.getLogger(__name__)
 

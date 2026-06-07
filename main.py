@@ -1,16 +1,15 @@
 """
-main.py — ring_guardian entry point
+main.py — guardian entry point (RTSP edition)
 
 Usage:
-  python main.py --camera "Front Door"
-  python main.py --camera "Front Door" --width 1920 --height 1080 --fps 20
-  python main.py --list          # list available cameras then exit
+  python main.py                 # start capture + GUI using config.json
+  python main.py --check         # test the RTSP connection then exit
   python main.py --gui-only      # open GUI to browse saved clips (no capture)
+  python main.py --width 1920 --height 1080 --fps 20
 
-Environment variables for first-run auth (saved to ring_token.json after):
-  RING_USERNAME=you@example.com
-  RING_PASSWORD=yourpassword
-  RING_OTP=123456            (only if 2FA is enabled)
+Camera URL is read from config.json ("rtsp_url") or the CAM_RTSP_URL env var.
+Copy config.example.json to config.json and fill in your camera's RTSP link
+(generate it in eWeLink: Device Settings -> More Settings -> RTSP -> Create RTSP Link).
 """
 
 from __future__ import annotations
@@ -38,11 +37,12 @@ logger = logging.getLogger("main")
 # ---------------------------------------------------------------------------
 from PyQt6.QtWidgets import QApplication
 
-from ring_capture import RingCaptureThread, list_cameras
+from rtsp_capture import RTSPCaptureThread, probe_stream
 from motion import MotionPipelineThread
 from recorder import RecorderThread
 from gui import MainWindow
-from ring_auth import run_auth_dialog
+from config import load_rtsp_url, load_camera_name, load_control_dict
+from camera_control import CameraControl, ControlConfig
 
 
 # ---------------------------------------------------------------------------
@@ -51,11 +51,13 @@ from ring_auth import run_auth_dialog
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="Ring Guardian — live motion-capture viewer",
+        description="Guardian — live RTSP motion-capture viewer",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    p.add_argument("--camera",   metavar="NAME",  help="Camera name to stream")
-    p.add_argument("--list",     action="store_true", help="List cameras and exit")
+    p.add_argument("--url",      metavar="RTSP_URL",
+                   help="RTSP URL (overrides config.json / CAM_RTSP_URL)")
+    p.add_argument("--check",    action="store_true",
+                   help="Test the RTSP connection and exit")
     p.add_argument("--gui-only", action="store_true", help="Browse saved clips, no capture")
     p.add_argument("--width",    type=int, default=1280)
     p.add_argument("--height",   type=int, default=720)
@@ -74,38 +76,7 @@ def parse_args() -> argparse.Namespace:
                    help="Seconds of quiet after motion before clip is closed")
     p.add_argument("--output-fps", type=float, default=15.0,
                    help="FPS written to output MP4")
-    p.add_argument("--node",     default="node",
-                   help="Path to node binary (default: 'node' in PATH)")
     return p.parse_args()
-
-
-# ---------------------------------------------------------------------------
-# Token helpers
-# ---------------------------------------------------------------------------
-
-TOKEN_FILE = Path("ring_token.json")
-
-
-def _token_exists() -> bool:
-    """Return True if ring_token.json exists and has a non-empty refreshToken."""
-    try:
-        import json
-        data = json.loads(TOKEN_FILE.read_text())
-        return bool(data.get("refreshToken"))
-    except Exception:
-        return False
-
-
-def _ensure_token(node_bin: str) -> bool:
-    """
-    If no token is present, launch the Qt auth dialog.
-    Returns True when a valid token is available, False if the user cancelled.
-    Must be called after a QApplication exists.
-    """
-    if _token_exists():
-        return True
-    logger.info("No Ring token found — showing sign-in dialog.")
-    return run_auth_dialog(node_bin=node_bin)
 
 
 # ---------------------------------------------------------------------------
@@ -115,39 +86,41 @@ def _ensure_token(node_bin: str) -> bool:
 def main():
     args = parse_args()
 
-    # QApplication is needed for both the auth dialog and the main GUI,
-    # so we create it once here regardless of mode.
+    # Resolve the RTSP URL: --url flag > config.json / env var
+    rtsp_url = args.url or load_rtsp_url()
+    camera_name = load_camera_name()
+
+    # --check mode: probe the stream and exit (no GUI). Doesn't need the URL
+    # to be in config if passed via --url.
+    if args.check:
+        if not rtsp_url:
+            logger.error("No RTSP URL set. Use --url, or copy config.example.json "
+                         "to config.json and fill in rtsp_url.")
+            sys.exit(1)
+        logger.info("Probing RTSP stream…")
+        size = probe_stream(rtsp_url)
+        if size:
+            print(f"OK — stream is reachable. Native resolution: {size[0]}x{size[1]}")
+            sys.exit(0)
+        else:
+            print("FAILED — could not open the stream. Check the URL, that the "
+                  "camera is on the same network, and that RTSP is enabled in eWeLink.")
+            sys.exit(1)
+
+    # QApplication is needed for the GUI; create it once here regardless of mode.
     app = QApplication.instance() or QApplication(sys.argv)
     app.setStyle("Fusion")
     _apply_dark_palette(app)
 
-    # --list mode: still needs a token to talk to Ring's API
-    if args.list:
-        if not _ensure_token(args.node):
-            logger.error("Authentication cancelled.")
-            sys.exit(1)
-        logger.info("Querying available cameras…")
-        names = list_cameras(node_bin=args.node)
-        if names:
-            print("Available cameras:")
-            for n in names:
-                print(f"  • {n}")
-        else:
-            print("No cameras found (or bridge failed — check ring_token.json).")
-        return
-
-    # GUI-only mode: just show the player, no token required
+    # GUI-only mode: just show the player, no capture
     if args.gui_only:
         _run_gui(meta_queue=queue.Queue())
         return
 
-    # Normal capture mode — ensure we have a token before starting threads
-    if not _ensure_token(args.node):
-        logger.error("Authentication cancelled.")
-        sys.exit(1)
-
-    if not args.camera:
-        logger.error("--camera NAME is required (or use --list to see camera names).")
+    # Normal capture mode — we need a URL
+    if not rtsp_url:
+        logger.error("No RTSP URL set. Use --url, or copy config.example.json "
+                     "to config.json and fill in rtsp_url.")
         sys.exit(1)
 
     # Pipeline queues
@@ -157,13 +130,13 @@ def main():
     live_queue  = queue.Queue(maxsize=4)    # small — GUI only needs latest frame
 
     # Threads
-    capture_thread = RingCaptureThread(
-        camera_name=args.camera,
+    capture_thread = RTSPCaptureThread(
+        rtsp_url=rtsp_url,
         out_queue=frame_queue,
+        camera_name=camera_name,
         width=args.width,
         height=args.height,
         fps=args.fps,
-        node_bin=args.node,
     )
     motion_thread = MotionPipelineThread(
         in_queue=frame_queue,
@@ -204,12 +177,24 @@ def main():
     logger.info(
         "Pipeline started — camera: %s  |  %dx%d @ %dfps  |  "
         "threshold: %.4f  |  Ctrl-C to stop",
-        args.camera, args.width, args.height, args.fps, args.threshold,
+        camera_name, args.width, args.height, args.fps, args.threshold,
     )
 
+    # Build the camera-control client from config.json -> "control" (if present).
+    # status_callback lets control results show up in the GUI status bar.
+    control_status = {"fn": None}   # late-bound to the window after it exists
+    def _control_status(msg: str):
+        if control_status["fn"]:
+            control_status["fn"](msg)
+    camera_control = _build_camera_control(_control_status)
+
     # Launch GUI (blocks until window is closed)
-    _run_gui(meta_queue=meta_queue, camera_name=args.camera,
-             live_queue=live_queue, on_shutdown=_stop_threads)
+    win = MainWindow(meta_queue=meta_queue, live_queue=live_queue,
+                     on_shutdown=_stop_threads, camera_control=camera_control)
+    control_status["fn"] = win.set_status
+    win.set_status(f"Live capture  •  {camera_name}")
+    win.show()
+    app.exec()
 
     # GUI closed — stop everything
     logger.info("GUI closed, stopping threads…")
@@ -235,6 +220,25 @@ def _run_gui(meta_queue: queue.Queue, camera_name: str = "",
     win.show()
 
     app.exec()
+
+
+def _build_camera_control(status_callback=None):
+    """
+    Construct a CameraControl from config.json -> "control".
+    Returns None if no usable control block is configured.
+    """
+    raw = load_control_dict()
+    if not raw:
+        return None
+    # Map the JSON keys onto ControlConfig fields, ignoring any extras
+    # (e.g. the "_comment" helper key in config.example.json).
+    valid = {f for f in ControlConfig.__dataclass_fields__}
+    cfg = ControlConfig(**{k: v for k, v in raw.items() if k in valid})
+    if not cfg.configured:
+        logger.info("Control block present but incomplete — PTZ controls hidden.")
+        return None
+    logger.info("Camera control enabled: %s", cfg.base_url)
+    return CameraControl(cfg, status_callback=status_callback)
 
 
 def _apply_dark_palette(app: QApplication):
