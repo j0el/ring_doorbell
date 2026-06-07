@@ -1,0 +1,37 @@
+{
+  "cameras": {
+    "balcony": {
+      "name": "Balcony",
+      "hls": "/balcony/index.m3u8",
+      "control": {
+        "base_url": "http://CAMERA_HOST",
+        "username": "thingino",
+        "password": "YOUR_CAMERA_PASSWORD",
+        "method": "GET",
+
+        "_comment": "Motor uses GET with signed x/y step offsets ({x}/{y} filled from `step`). IR/night uses a JSON POST to json-imp.cgi. Flip invert_x/invert_y if an arrow moves the wrong way. NOTE: add the camera-api host's IP to the camera's webui.auth_bypass_ips so control requests are allowed. The 'hls' value is a PATH; MEDIAMTX_BASE env var is prefixed to it (default http://localhost:8888).",
+
+        "move_path": "/x/json-motor.cgi?d=g&x={x}&y={y}",
+        "stop_path": "",
+        "step": 20,
+        "invert_x": false,
+        "invert_y": false,
+        "pulse_seconds": 0,
+
+        "ir_on_path":  "/x/json-imp.cgi",
+        "ir_on_body":  { "cmd": "daynight", "val": "night" },
+        "ir_off_path": "/x/json-imp.cgi",
+        "ir_off_body": { "cmd": "daynight", "val": "day" },
+
+        "timeout": 4.0,
+        "verify_tls": false
+      }
+    },
+
+    "ring": {
+      "name": "Ring Doorbell",
+      "hls": "/ring/index.m3u8",
+      "_comment": "No control block — Ring has no pan/IR HTTP API, so this renders view-only."
+    }
+  }
+}

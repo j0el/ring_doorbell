@@ -1,0 +1,4 @@
+# real config holds camera credentials — never commit it
+config.json
+__pycache__/
+*.pyc

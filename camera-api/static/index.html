@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cameras · joelberman.net</title>
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.13/dist/hls.min.js"></script>
+<style>
+  :root {
+    --bg: #0b0e11;
+    --panel: #14181d;
+    --panel-edge: #1f262d;
+    --ink: #e6edf3;
+    --ink-dim: #7d8a97;
+    --accent: #4ea1ff;
+    --accent-warm: #ffb454;
+    --ok: #3fb950;
+    --bad: #f85149;
+    --mono: "SF Mono", "JetBrains Mono", "Fira Code", ui-monospace, monospace;
+    --sans: "Helvetica Neue", "Inter", system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background:
+      radial-gradient(1200px 600px at 70% -10%, #11181f 0%, transparent 60%),
+      var(--bg);
+    color: var(--ink);
+    font-family: var(--sans);
+    -webkit-font-smoothing: antialiased;
+    padding: 18px;
+  }
+  header {
+    display: flex; align-items: baseline; gap: 14px;
+    padding: 4px 4px 16px;
+    border-bottom: 1px solid var(--panel-edge);
+    margin-bottom: 18px;
+  }
+  header h1 {
+    font-size: 15px; font-weight: 600; letter-spacing: 0.14em;
+    text-transform: uppercase;
+  }
+  header .sub {
+    font-family: var(--mono); font-size: 12px; color: var(--ink-dim);
+  }
+  header .clock {
+    margin-left: auto; font-family: var(--mono); font-size: 13px;
+    color: var(--accent); letter-spacing: 0.05em;
+  }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(440px, 1fr));
+    gap: 18px;
+    max-width: 1400px;
+    margin: 0 auto;
+  }
+  .cam {
+    background: var(--panel);
+    border: 1px solid var(--panel-edge);
+    border-radius: 10px;
+    overflow: hidden;
+    display: flex; flex-direction: column;
+  }
+  .cam-head {
+    display: flex; align-items: center; gap: 10px;
+    padding: 11px 14px;
+    border-bottom: 1px solid var(--panel-edge);
+  }
+  .cam-head .name {
+    font-size: 13px; font-weight: 600; letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+  .dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--ink-dim); flex: none;
+    box-shadow: 0 0 0 0 transparent; transition: all .3s;
+  }
+  .dot.live { background: var(--ok); box-shadow: 0 0 8px 1px rgba(63,185,80,.6); }
+  .dot.err { background: var(--bad); box-shadow: 0 0 8px 1px rgba(248,81,73,.6); }
+  .cam-head .status {
+    margin-left: auto; font-family: var(--mono); font-size: 11px;
+    color: var(--ink-dim); min-height: 14px; text-align: right;
+  }
+  .video-wrap {
+    position: relative; background: #000; aspect-ratio: 16 / 9;
+    max-height: 60vh;
+  }
+  video { width: 100%; height: 100%; display: block; object-fit: contain; }
+  .video-wrap .placeholder {
+    position: absolute; inset: 0; display: flex; align-items: center;
+    justify-content: center; font-family: var(--mono); font-size: 12px;
+    color: var(--ink-dim); letter-spacing: 0.1em;
+  }
+  .controls {
+    display: flex; align-items: center; gap: 18px;
+    padding: 13px 14px;
+  }
+  .controls.hidden { display: none; }
+  .pad {
+    display: flex;
+    gap: 6px;
+  }
+  .pad button {
+    border: 1px solid var(--panel-edge);
+    background: #1a1f25; color: var(--ink);
+    border-radius: 6px; cursor: pointer; font-size: 15px;
+    display: flex; align-items: center; justify-content: center;
+    transition: background .12s, border-color .12s, transform .05s;
+    user-select: none;
+  }
+  .pad button:hover { background: #232b33; border-color: var(--accent); }
+  .pad button:active { transform: scale(0.92); background: var(--accent); color: #061018; }
+  .pad .spacer { visibility: hidden; }
+  .pad .center {
+    font-size: 10px; font-family: var(--mono); color: var(--ink-dim);
+    cursor: default; pointer-events: none; border-style: dashed;
+  }
+  .ir {
+    display: flex; flex-direction: column; gap: 6px; margin-left: auto;
+  }
+  .ir .label {
+    font-family: var(--mono); font-size: 10px; letter-spacing: 0.12em;
+    color: var(--ink-dim); text-transform: uppercase;
+  }
+  .toggle { display: flex; border: 1px solid var(--panel-edge); border-radius: 6px; overflow: hidden; }
+  .toggle button {
+    border: 0; background: #1a1f25; color: var(--ink-dim);
+    padding: 7px 12px; cursor: pointer; font-size: 12px;
+    font-family: var(--mono); letter-spacing: 0.05em; transition: all .12s;
+  }
+  .toggle button.day.on { background: var(--accent-warm); color: #1a1205; }
+  .toggle button.night.on { background: #2a3f6b; color: #cfe0ff; }
+  .toggle button:not(.on):hover { background: #232b33; color: var(--ink); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Cameras</h1>
+  <span class="sub">joelberman.net</span>
+  <span class="clock" id="clock"></span>
+</header>
+<main class="grid" id="grid"></main>
+
+<script>
+const grid = document.getElementById("grid");
+
+function clock() {
+  document.getElementById("clock").textContent =
+    new Date().toLocaleTimeString([], {hour12:false});
+}
+setInterval(clock, 1000); clock();
+
+function attachHls(video, url, onLive, onErr, onStall) {
+  // Explicitly start playback. Chrome (unlike Safari) won't auto-resume a
+  // muted autoplay video after hls.js attaches a source, leaving it paused.
+  // Calling play() nudges it; if the policy still blocks, surface a tap-to-play.
+  const tryPlay = () => {
+    const p = video.play();
+    if (p && p.catch) {
+      p.catch(() => {
+        video.addEventListener("click", () => video.play(), { once: true });
+      });
+    }
+  };
+
+  let hls = null;
+
+  if (video.canPlayType("application/vnd.apple.mpegurl")) {
+    // Safari / native HLS
+    video.src = url;
+    video.addEventListener("loadeddata", () => { onLive(); tryPlay(); }, {once:true});
+    video.addEventListener("error", onErr, {once:true});
+  } else if (window.Hls && Hls.isSupported()) {
+    hls = new Hls({
+      lowLatencyMode: true,
+      // Hug the live edge: stay ~1 segment back instead of 3, and snap back
+      // to live if we drift. Lowers glass-to-glass latency noticeably.
+      liveSyncDurationCount: 1,
+      liveMaxLatencyDurationCount: 4,
+      maxLiveSyncPlaybackRate: 1.5,
+    });
+    hls.loadSource(url);
+    hls.attachMedia(video);
+    hls.on(Hls.Events.MANIFEST_PARSED, tryPlay);
+    hls.on(Hls.Events.FRAG_BUFFERED, () => { onLive(); tryPlay(); });
+    hls.on(Hls.Events.ERROR, (_e, data) => {
+      if (data.fatal) { onErr(); if (onStall) onStall(); }
+    });
+  } else {
+    onErr();
+  }
+
+  // Return a teardown so the caller can cleanly re-attach on stall.
+  return () => { if (hls) { try { hls.destroy(); } catch {} } video.removeAttribute("src"); video.load(); };
+}
+
+async function api(path, body) {
+  const r = await fetch(path, {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) {
+    const txt = await r.text().catch(() => "");
+    throw new Error(`HTTP ${r.status} ${txt}`);
+  }
+  return r.json();
+}
+
+function buildCam(cam) {
+  const el = document.createElement("section");
+  el.className = "cam";
+
+  const padButtons = [
+    ["left","←"], ["right","→"],
+  ];
+
+  el.innerHTML = `
+    <div class="cam-head">
+      <span class="dot" data-dot></span>
+      <span class="name">${cam.name}</span>
+      <span class="status" data-status>connecting…</span>
+    </div>
+    <div class="video-wrap">
+      <video data-video muted autoplay playsinline></video>
+      <div class="placeholder" data-ph>NO SIGNAL</div>
+    </div>
+    <div class="controls ${cam.controllable ? "" : "hidden"}">
+      <div class="pad">
+        ${padButtons.map(([d,sym]) =>
+          `<button data-dir="${d}">${sym}</button>`).join("")}
+      </div>
+    </div>`;
+
+  const dot = el.querySelector("[data-dot]");
+  const status = el.querySelector("[data-status]");
+  const video = el.querySelector("[data-video]");
+  const ph = el.querySelector("[data-ph]");
+
+  const setStatus = (msg, kind) => {
+    status.textContent = msg;
+    dot.className = "dot" + (kind ? " " + kind : "");
+  };
+
+  // Attach the stream with a stall-watchdog that re-attaches just this tile
+  // when it goes dead (e.g. Ring's live call expires and the bridge reconnects).
+  // We re-attach one camera rather than reloading the page, so the other tile
+  // (and the cache-clearing extension headache) is never disturbed.
+  let teardown = null;
+  let lastTime = -1;
+  let stalledTicks = 0;
+
+  const start = () => {
+    if (teardown) teardown();
+    // Reset progress tracking so a fresh attach isn't judged against the
+    // dead stream's last position (that bug caused an endless re-attach loop).
+    lastTime = -1;
+    stalledTicks = 0;
+    teardown = attachHls(video, cam.hls,
+      () => { ph.style.display = "none"; setStatus("live", "live"); },
+      () => { ph.style.display = "flex"; setStatus("reconnecting…", "err"); },
+      () => { /* fatal hls error -> let watchdog re-attach */ });
+  };
+
+  start();
+
+  // Progress watchdog. Every 4s, check whether playback advanced. Require TWO
+  // consecutive stalled checks (~8s) before re-attaching, so a brief buffering
+  // blip doesn't tear down a stream that's about to recover on its own. On the
+  // first poll after a fresh attach, lastTime is -1, so we just record and wait.
+  setInterval(() => {
+    if (video.paused) { stalledTicks = 0; return; }  // tap-to-play; don't fight it
+    const t = video.currentTime;
+    if (lastTime >= 0 && t === lastTime) {
+      stalledTicks++;
+      if (stalledTicks >= 2) {
+        setStatus("reconnecting…", "err");
+        ph.style.display = "flex";
+        start();   // resets lastTime + stalledTicks
+        return;
+      }
+    } else {
+      stalledTicks = 0;
+    }
+    lastTime = t;
+  }, 4000);
+
+  // Pan
+  el.querySelectorAll("[data-dir]").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      try {
+        await api(`/api/${cam.id}/move`, {dir: btn.dataset.dir});
+        setStatus(`pan ${btn.dataset.dir} ✓`, "live");
+      } catch (e) { setStatus(`pan failed`, "err"); console.error(e); }
+    });
+  });
+
+  return el;
+}
+
+(async function init() {
+  try {
+    const cams = await (await fetch("/api/cameras")).json();
+    if (!cams.length) { grid.innerHTML = "<p style='color:var(--ink-dim);font-family:var(--mono)'>No cameras configured.</p>"; return; }
+    cams.forEach(cam => grid.appendChild(buildCam(cam)));
+  } catch (e) {
+    grid.innerHTML = "<p style='color:var(--bad);font-family:var(--mono)'>Failed to load cameras: " + e.message + "</p>";
+  }
+})();
+</script>
+</body>
+</html>
